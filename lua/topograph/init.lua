@@ -202,11 +202,44 @@ local function attachEvents()
   })
 end
 
+-- Helper to verify if a file belongs to your actual project codebase
+local function is_project_source(file_path, root)
+  if not file_path or file_path == "" then return false end
+
+  -- Resolve symlinks and normalize path separators
+  local norm_file = vim.fs.normalize(vim.uv.fs_realpath(file_path) or file_path)
+  local norm_root = vim.fs.normalize(vim.uv.fs_realpath(root) or root)
+
+  -- 1. Discard anything outside your project folder (Homebrew, /usr, SDKs)
+  if not vim.startswith(norm_file, norm_root) then
+    return false
+  end
+
+  -- 2. Discard dependencies living inside the project folder
+  local rel = norm_file:sub(#norm_root + 1):lower()
+  local ignore_patterns = {
+    "/vendor/",
+    "/build/",
+    "/_deps/",        -- CMake FetchContent
+    "/external/",
+    "/third_party/",
+    "/submodules/",
+  }
+
+  for _, pattern in ipairs(ignore_patterns) do
+    if rel:find(pattern, 1, true) then
+      return false
+    end
+  end
+
+  return true
+end
+
 local function processLSPSymbols(rawSym)
   state.grouped_data = {}
   state.categories = {}
 
-    local project_root = vim.fs.root(0, { "compile_commands.json", "CMakeLists.txt", ".git" }) or vim.fn.getcwd()
+  local root = vim.fs.root(0, { "compile_commands.json", "CMakeLists.txt", ".git" }) or vim.fn.getcwd()
 
   for _, sym in ipairs(rawSym) do
     local group = KIND_NAMES[sym.kind]
@@ -216,14 +249,14 @@ local function processLSPSymbols(rawSym)
       local range = loc and loc.range or sym.range
 
       if uri and range then
-        local filePath = vim.uri_to_fname(uri)
-        local isProjectFile = vim.startswith(filePath, project_root) and not filePath:match("/vendor/")
-        
-        if isProjectFile then
+        local file_path = vim.uri_to_fname(uri)
+
+        -- Exclude third-party headers and vendored files
+        if is_project_source(file_path, root) then
           state.grouped_data[group] = state.grouped_data[group] or {}
           table.insert(state.grouped_data[group], {
             name = sym.name,
-            file = vim.uri_to_fname(uri),
+            file = file_path,
             line = range.start.line,
             col = range.start.character,
           })
@@ -242,6 +275,7 @@ local function processLSPSymbols(rawSym)
   end
   return col1Labels
 end
+
 
 function M.open()
   getOrStartClient(function(client)
