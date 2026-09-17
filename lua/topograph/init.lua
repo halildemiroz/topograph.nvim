@@ -23,6 +23,43 @@ local function createScratchBuf()
   return buf
 end
 
+local function getOrStartClient(callback)
+  local clients = vim.lsp.get_clients()
+  for _, client in ipairs(clients) do
+    if client:supports_method("workspace/symbol") then
+      callback(client)
+      return
+    end
+  end
+
+  local root = vim.fs.root(0, {"compile_commands.json", "CMakeLists.txt", ".git"}) or vim.fn.getcwd()
+
+  vim.notify("Starting clangd for workspace: " .. vim.fs.basename(root), vim.log.levels.INFO)
+
+  local clientID = vim.lsp.start({
+      name = "clangd",
+      cmd = {"clangd"},
+      rootDir = root,
+    })
+
+  if not clientID then
+    vim.notify("Could not launc clangd")
+    return
+  end
+
+  local client = vim.lsp.get_client_by_id(clientID)
+  if not client then return end
+
+  if client.initialized then
+    callback(clien)
+  else
+    vim.defer_fn(function()
+      callback(client)
+    end, 500)
+  end
+end
+
+
 local function closeUI()
   if state.tab and vim.api.nvim_tabpage_is_valid(state.tab) then
     vim.cmd("tabclose")
@@ -173,51 +210,51 @@ local function processLSPSymbols(rawSym)
 end
 
 function M.open()
-  -- Ask active LSP for workspace symbols
-  vim.lsp.buf_request(0, "workspace/symbol", { query = "" }, function(err, result)
-    if err or not result or #result == 0 then
-      vim.notify("No workspace symbols found from active LSP", vim.log.levels.WARN)
-      return
-    end
+  getOrStartClient(function(client)
+    client:request("workspace/symbol", { query = "" }, function(err, result)
+      if err or not result or #result == 0 then
+        vim.notify("No workspace symbols found in current project", vim.log.levels.WARN)
+        return
+      end
 
-    local col1Labels = processLSPSymbols(result)
-    if #col1Labels == 0 then
-      vim.notify("No matching symbols found", vim.log.levels.INFO)
-      return
-    end
+      local col1Labels = processLSPSymbols(result)
+      if #col1Labels == 0 then
+        vim.notify("No matching Classes, Structs, or Functions found", vim.log.levels.INFO)
+        return
+      end
 
-    vim.cmd("tabnew")
-    state.tab = vim.api.nvim_get_current_tabpage()
+      vim.cmd("tabnew")
+      state.tab = vim.api.nvim_get_current_tabpage()
 
-    state.bufs[1] = createScratchBuf()
-    state.bufs[2] = createScratchBuf()
-    state.bufs[3] = createScratchBuf()
+      state.bufs[1] = createScratchBuf()
+      state.bufs[2] = createScratchBuf()
+      state.bufs[3] = createScratchBuf()
 
-    local total_cols = vim.o.columns
-    local col1_width = math.floor(total_cols * 0.2)
-    local col2_width = math.floor(total_cols * 0.3)
+      local total_cols = vim.o.columns
+      local col1_width = math.floor(total_cols * 0.2)
+      local col2_width = math.floor(total_cols * 0.3)
 
-    state.wins[1] = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(state.wins[1], state.bufs[1])
+      state.wins[1] = vim.api.nvim_get_current_win()
+      vim.api.nvim_win_set_buf(state.wins[1], state.bufs[1])
 
-    state.wins[2] = vim.api.nvim_open_win(state.bufs[2], false, {
-      win = state.wins[1],
-      split = "right",
-    })
+      state.wins[2] = vim.api.nvim_open_win(state.bufs[2], false, {
+        win = state.wins[1],
+        split = "right",
+      })
 
-    state.wins[3] = vim.api.nvim_open_win(state.bufs[3], false, {
-      win = state.wins[2],
-      split = "right",
-    })
+      state.wins[3] = vim.api.nvim_open_win(state.bufs[3], false, {
+        win = state.wins[2],
+        split = "right",
+      })
 
-    vim.api.nvim_win_set_width(state.wins[1], col1_width)
-    vim.api.nvim_win_set_width(state.wins[2], col2_width)
+      vim.api.nvim_win_set_width(state.wins[1], col1_width)
+      vim.api.nvim_win_set_width(state.wins[2], col2_width)
 
-    -- Populating Col 1 with col1Labels
-    vim.api.nvim_buf_set_lines(state.bufs[1], 0, -1, false, col1Labels)
-    updateCol2(state.categories[1])
+      vim.api.nvim_buf_set_lines(state.bufs[1], 0, -1, false, col1Labels)
+      updateCol2(state.categories[1])
 
-    attachEvents()
+      attachEvents()
+    end)
   end)
 end
 
