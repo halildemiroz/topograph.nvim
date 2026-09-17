@@ -8,7 +8,7 @@ local state = {
   grouped_data = {},
   client = nil,
   col3_members = {},
-  col3_mode = "preview", -- "preview" | "members"
+  col3_mode = "preview",
 }
 
 local KIND_NAMES = {
