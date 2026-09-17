@@ -12,7 +12,8 @@ local KIND_NAMES = {
   [3] = "Namespaces",
   [5] = "Classes",
   [6] = "Methods",
-  [11] = "Functions",
+  [11] = "Interfaces",
+  [12] = "Functions",
   [23] = "Structs",
 }
 
@@ -23,47 +24,7 @@ local function createScratchBuf()
   return buf
 end
 
--- local function getOrStartClient(callback)
---   local clients = vim.lsp.get_clients()
---   for _, client in ipairs(clients) do
---     if client:supports_method("workspace/symbol") then
---       callback(client)
---       return
---     end
---   end
---
---   local root = vim.fs.root(0, {"compile_commands.json", "CMakeLists.txt", ".git"}) or vim.fn.getcwd()
---   vim.notify("Starting clangd for workspace: " .. vim.fs.basename(root), vim.log.levels.INFO)
---
---   local clientID = vim.lsp.start({
---       name = "clangd",
---       cmd = {"clangd", "--background-index"},
---       rootDir = root,
---     })
---
---   if not clientID then
---     vim.notify("Could not start clangd", vim.log.levels.ERROR)
---     return
---   end
---
---   local client = vim.lsp.get_client_by_id(clientID)
---   if not client then return end
---
---   local candidate = vim.fs.find({"main.cpp", "main.c", "App.cpp"}, {path = root, type = file})[1]
---   if candidate and vim.api.nvim_buf_get_name(0) == "" then
---     vim.cmd("silent! badd " .. vim.fn.fnameescape(candidate))
---     local preloadBuf = vim.fn.bufnr(candidate)
---     vim.lsp.buf_attach_client(preloadBuf, clientID)
---   end
---
---   vim.defer_fn(function ()
---     callback(client)
---   end, 2000)
--- end
-
-
 local function getOrStartClient(callback)
-  -- 1. Check if an active client already exists
   local clients = vim.lsp.get_clients()
   for _, client in ipairs(clients) do
     if client:supports_method("workspace/symbol") then
@@ -72,13 +33,16 @@ local function getOrStartClient(callback)
     end
   end
 
-  -- 2. Determine project root
   local root = vim.fs.root(0, { "compile_commands.json", "CMakeLists.txt", ".git" }) or vim.fn.getcwd()
   vim.notify("Starting clangd for workspace: " .. vim.fs.basename(root), vim.log.levels.INFO)
 
   local client_id = vim.lsp.start({
     name = "clangd",
-    cmd = { "clangd", "--background-index" },
+    cmd = { "clangd",
+      "--background-index",
+      "--limit-results=0",
+      "--header-insertion=never"
+    },
     root_dir = root,
   })
 
@@ -90,7 +54,21 @@ local function getOrStartClient(callback)
   local client = vim.lsp.get_client_by_id(client_id)
   if not client then return end
 
-  -- 3. If on an empty buffer, recursively find any source file (e.g. engine/src/main.cpp)
+    if vim.api.nvim_buf_get_name(0) == "" then
+    local source_files = vim.fs.find(function(name, path)
+      if path:match("/vendor") or path:match("/build") or path:match("/%.git") then
+        return false
+      end
+      return name:match("%.cpp$") or name:match("%.c$") or name:match("%.h$") or name:match("%.hpp$")
+    end, { path = root, type = "file", limit = 50 })
+
+    for _, target_file in ipairs(source_files) do
+      local preload_buf = vim.fn.bufadd(target_file)
+      vim.fn.bufload(preload_buf)
+      vim.lsp.buf_attach_client(preload_buf, client_id)
+    end
+  end
+
   if vim.api.nvim_buf_get_name(0) == "" then
     local source_files = vim.fs.find(function(name)
       return name:match("%.cpp$") or name:match("%.c$") or name:match("%.h$")
@@ -98,14 +76,12 @@ local function getOrStartClient(callback)
 
     if #source_files > 0 then
       local target_file = source_files[1]
-      -- Load file into RAM and attach clangd so it parses the translation unit
       local preload_buf = vim.fn.bufadd(target_file)
       vim.fn.bufload(preload_buf)
       vim.lsp.buf_attach_client(preload_buf, client_id)
     end
   end
 
-  -- 4. Give clangd 2 seconds to parse ASTs and build the symbol table
   vim.defer_fn(function()
     callback(client)
   end, 2000)
@@ -230,22 +206,28 @@ local function processLSPSymbols(rawSym)
   state.grouped_data = {}
   state.categories = {}
 
+    local project_root = vim.fs.root(0, { "compile_commands.json", "CMakeLists.txt", ".git" }) or vim.fn.getcwd()
+
   for _, sym in ipairs(rawSym) do
     local group = KIND_NAMES[sym.kind]
     if group then
-      state.grouped_data[group] = state.grouped_data[group] or {}
-
       local loc = sym.location or sym.locationInformation
       local uri = loc and loc.uri or sym.uri
       local range = loc and loc.range or sym.range
 
       if uri and range then
-        table.insert(state.grouped_data[group], {
-          name = sym.name,
-          file = vim.uri_to_fname(uri),
-          line = range.start.line,
-          col = range.start.character,
-        })
+        local filePath = vim.uri_to_fname(uri)
+        local isProjectFile = vim.startswith(filePath, project_root) and not filePath:match("/vendor/")
+        
+        if isProjectFile then
+          state.grouped_data[group] = state.grouped_data[group] or {}
+          table.insert(state.grouped_data[group], {
+            name = sym.name,
+            file = vim.uri_to_fname(uri),
+            line = range.start.line,
+            col = range.start.character,
+          })
+        end
       end
     end
   end
