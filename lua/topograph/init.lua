@@ -33,30 +33,32 @@ local function getOrStartClient(callback)
   end
 
   local root = vim.fs.root(0, {"compile_commands.json", "CMakeLists.txt", ".git"}) or vim.fn.getcwd()
-
   vim.notify("Starting clangd for workspace: " .. vim.fs.basename(root), vim.log.levels.INFO)
 
   local clientID = vim.lsp.start({
       name = "clangd",
-      cmd = {"clangd"},
+      cmd = {"clangd", "--background-index"},
       rootDir = root,
     })
 
   if not clientID then
-    vim.notify("Could not launc clangd")
+    vim.notify("Could not start clangd", vim.log.levels.ERROR)
     return
   end
 
   local client = vim.lsp.get_client_by_id(clientID)
   if not client then return end
-
-  if client.initialized then
-    callback(clien)
-  else
-    vim.defer_fn(function()
-      callback(client)
-    end, 500)
+  
+  local candidate = vim.fs.find({"main.cpp", "main.c", "App.cpp"}, {path = root, type = file})[1]
+  if candidate and vim.api.nvim_buf_get_name(0) == "" then
+    vim.cmd("silent! badd " .. vim.fn.fnameescape(candidate))
+    local preloadBuf = vim.fn.bufnr(candidate)
+    vim.lsp.buf_attach_client(preloadBuf, clientID)
   end
+
+  vim.defer_fn(function ()
+    callback(client)
+  end, 1500)
 end
 
 
